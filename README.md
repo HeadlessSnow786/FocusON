@@ -10,6 +10,15 @@
 - **Productivity Screenshot Analysis:** Takes a screenshot every 30 seconds and uses ChatGPT (GPT-4 Vision) to determine if you are on a productive or non-productive website/application.
 - **Real-Time Feedback:** Displays messages and alerts directly on the video feed.
 
+## Research Paper Citations
+- **Environmental Distractions:**
+  Goldberg, Joseph H., and Xerxes P. Kotval. “Computer Interface Evaluation Using Eye Movements: Methods and Constructs.” International Journal of Industrial Ergonomics, vol. 24, no. 6, 1999, pp. 631–45, https://doi.org/10.1016/S0169-8141(98)00068-7.
+
+- **Energy Levels:** 
+Stern, John A., et al. “The Endogenous Eyeblink.” Psychophysiology, vol. 21, no. 1, 1984, pp. 22–33, https://doi.org/10.1111/j.1469-8986.1984.tb02312.x.
+
+- **On Screen Distractions:**
+
 ## Requirements
 
 - Python 3.8+
