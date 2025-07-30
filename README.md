@@ -49,6 +49,7 @@ pip install -r requirements.txt
 - Screenshots are sent to OpenAI for productivity analysis. Be mindful of privacy.
 - The system works best in well-lit environments with a clear view of your face.
 - You can adjust thresholds and intervals in the code to suit your needs.
+- Gaze Tracking powered by Antoine Lamé's library. [Check it out!](https://github.com/antoinelame/GazeTracking)
 
 ## License
 
