@@ -2,12 +2,15 @@ import cv2
 import time
 import os
 import base64
-import requests
+from openai import OpenAI
 from PIL import ImageGrab, Image
 from gaze_tracking import GazeTracking
 
 gaze = GazeTracking()
 webcam = cv2.VideoCapture(0)
+
+# Score tracking variables
+score = 0
 
 # Blink tracking variables
 blink_count = 0
@@ -38,14 +41,14 @@ last_screenshot_time = time.time()
 productivity_message = ""
 productivity_message_time = 0
 productivity_message_duration = 5  # Show message for 5 seconds
-openai_api_key = os.getenv('OPENAI_API_KEY')  # Get API key from environment variable
+openai_api_key = os.getenv('OPENAI_API_KEY')  # Get API key from environment variable DO NOT SHARE THIS KEY WITH ANYONE
 
 def take_screenshot():
     """Take a screenshot, resize to 720p, and return the image as base64 string"""
     try:
         screenshot = ImageGrab.grab()
         
-        # Resize to 720p (1280x720) while maintaining aspect ratio
+        # Resize to 720p (1280x720) while maintaining aspect ratio (Saves tokens on API calls)
         target_width = 1280
         target_height = 720
         
@@ -86,14 +89,13 @@ def analyze_productivity_with_chatgpt(image_base64):
         return "Error: OpenAI API key not found. Please set OPENAI_API_KEY environment variable."
     
     try:
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {openai_api_key}"
-        }
+        # Initialize OpenAI client
+        client = OpenAI(api_key=openai_api_key)
         
-        payload = {
-            "model": "gpt-4.1-mini",
-            "messages": [
+        # Create the API call using the OpenAI library
+        response = client.chat.completions.create(
+            model="gpt-4.1-mini",  
+            messages=[
                 {
                     "role": "user",
                     "content": [
@@ -110,21 +112,12 @@ def analyze_productivity_with_chatgpt(image_base64):
                     ]
                 }
             ],
-            "max_tokens": 50
-        }
-        
-        response = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=30
+            max_tokens=50
         )
         
-        if response.status_code == 200:
-            result = response.json()['choices'][0]['message']['content'].strip()
-            return result
-        else:
-            return f"Error: API request failed with status {response.status_code}"
+        # Extract the response content
+        result = response.choices[0].message.content.strip()
+        return result
             
     except Exception as e:
         return f"Error: {str(e)}"
@@ -237,32 +230,55 @@ while True:
     elif gaze.is_center():
         text = "Looking center"
 
+    # Helper function to draw rounded rectangle with transparency
+    def draw_rounded_rect_with_bg(frame, text, position, font_scale, color, thickness, bg_color=(0, 0, 0), bg_alpha=0.3):
+        # Get text size
+        (text_width, text_height), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_DUPLEX, font_scale, thickness)
+        
+        # Calculate rectangle dimensions with padding
+        padding = 10
+        rect_width = text_width + 2 * padding
+        rect_height = text_height + 2 * padding
+        
+        # Rectangle coordinates
+        x, y = position
+        rect_x1, rect_y1 = x - padding, y - text_height - padding
+        rect_x2, rect_y2 = x + text_width + padding, y + padding
+        
+        # Draw semi-transparent background rectangle
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (rect_x1, rect_y1), (rect_x2, rect_y2), bg_color, -1)
+        cv2.addWeighted(overlay, bg_alpha, frame, 1 - bg_alpha, 0, frame)
+        
+        # Draw text
+        cv2.putText(frame, text, position, cv2.FONT_HERSHEY_DUPLEX, font_scale, color, thickness)
+    
     # Display gaze direction
-    cv2.putText(new_frame, text, (60, 60), cv2.FONT_HERSHEY_DUPLEX, 2, (255, 0, 0), 2)
+    draw_rounded_rect_with_bg(new_frame, text, (60, 60), 2, (255, 0, 0), 2, (0, 0, 0), 0.3)
     
     # Display blink information
-    cv2.putText(new_frame, f"Blinks: {blink_count}", (60, 120), cv2.FONT_HERSHEY_DUPLEX, 1, (0, 255, 0), 2)
-    cv2.putText(new_frame, f"BPM: {bpm:.1f}", (60, 160), cv2.FONT_HERSHEY_DUPLEX, 1, (0, 255, 0), 2)
-    cv2.putText(new_frame, f"Time: {elapsed_time:.1f}s", (60, 200), cv2.FONT_HERSHEY_DUPLEX, 1, (0, 255, 0), 2)
+    draw_rounded_rect_with_bg(new_frame, f"Blinks: {blink_count}", (60, 120), 1, (0, 255, 0), 2, (0, 0, 0), 0.3)
+    draw_rounded_rect_with_bg(new_frame, f"BPM: {bpm:.1f}", (60, 160), 1, (0, 255, 0), 2, (0, 0, 0), 0.3)
+    draw_rounded_rect_with_bg(new_frame, f"Time: {elapsed_time:.1f}s", (60, 200), 1, (0, 255, 0), 2, (0, 0, 0), 0.3)
     
     # Display baseline information
     if baseline_established:
-        cv2.putText(new_frame, f"Baseline: {baseline_bpm:.1f} BPM", (60, 240), cv2.FONT_HERSHEY_DUPLEX, 1, (255, 255, 0), 2)
+        draw_rounded_rect_with_bg(new_frame, f"Baseline: {baseline_bpm:.1f} BPM", (60, 240), 1, (255, 255, 0), 2, (0, 0, 0), 0.3)
     else:
         baseline_remaining = baseline_duration - (current_time - baseline_start_time)
-        cv2.putText(new_frame, f"Establishing baseline: {baseline_remaining:.0f}s", (60, 240), cv2.FONT_HERSHEY_DUPLEX, 1, (255, 255, 0), 2)
+        draw_rounded_rect_with_bg(new_frame, f"Establishing baseline: {baseline_remaining:.0f}s", (60, 240), 1, (255, 255, 0), 2, (0, 0, 0), 0.3)
     
     # Display change message
     if change_message:
-        cv2.putText(new_frame, change_message, (60, 280), cv2.FONT_HERSHEY_DUPLEX, 1.5, (0, 0, 255), 2)
+        draw_rounded_rect_with_bg(new_frame, change_message, (60, 280), 1.5, (0, 0, 255), 2, (0, 0, 0), 0.3)
     
     # Display eye contact message
     if eye_contact_message:
-        cv2.putText(new_frame, eye_contact_message, (60, 320), cv2.FONT_HERSHEY_DUPLEX, 1.5, (255, 0, 255), 2)
+        draw_rounded_rect_with_bg(new_frame, eye_contact_message, (60, 320), 1.5, (255, 0, 255), 2, (0, 0, 0), 0.3)
     
     # Display productivity message
     if productivity_message:
-        cv2.putText(new_frame, productivity_message, (60, 360), cv2.FONT_HERSHEY_DUPLEX, 1, (0, 255, 255), 2)
+        draw_rounded_rect_with_bg(new_frame, productivity_message, (60, 360), 1, (0, 255, 255), 2, (0, 0, 0), 0.3)
     
     cv2.imshow("Demo", new_frame)
 
