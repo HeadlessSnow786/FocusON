@@ -2,6 +2,9 @@ import cv2
 import time
 import os
 import base64
+import json
+import serial
+from datetime import datetime
 from openai import OpenAI
 from PIL import ImageGrab, Image
 from gaze_tracking import GazeTracking
@@ -9,8 +12,26 @@ from gaze_tracking import GazeTracking
 gaze = GazeTracking()
 webcam = cv2.VideoCapture(0)
 
-# Score tracking variables
-score = 0
+# Session tracking variables
+session_start_time = time.time()
+session_data = {
+    'start_time': session_start_time,
+    'blink_count': 0,
+    'productive_time': 0,
+    'distraction_count': 0,
+    'focus_score_total': 0,
+    'data_points': 0
+}
+
+# Persistent focus score tracking
+focus_score = 100  # Start with perfect score
+focus_score_decay_rate = 0.1  # Score recovers slowly over time
+last_score_update = time.time()
+
+# Distraction event tracking (to prevent repeated penalties)
+blink_penalty_applied = False
+eye_contact_penalty_applied = False
+productivity_penalty_applied = False
 
 # Blink tracking variables
 blink_count = 0
@@ -122,6 +143,81 @@ def analyze_productivity_with_chatgpt(image_base64):
     except Exception as e:
         return f"Error: {str(e)}"
 
+def update_session_stats(bpm, is_productive, focus_score):
+    """Update session statistics"""
+    session_data['blink_count'] += 1 if bpm > 0 else 0
+    session_data['productive_time'] += 1 if is_productive else 0
+    session_data['distraction_count'] += 1 if not is_productive else 0
+    session_data['focus_score_total'] += focus_score
+    session_data['data_points'] += 1
+
+def generate_session_report():
+    """Generate a simple session report"""
+    session_duration = time.time() - session_start_time
+    avg_focus_score = session_data['focus_score_total'] / session_data['data_points'] if session_data['data_points'] > 0 else 0
+    productivity_percentage = (session_data['productive_time'] / session_data['data_points'] * 100) if session_data['data_points'] > 0 else 0
+    
+    # Create session folder
+    session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    session_folder = f"reports/session_{session_id}"
+    os.makedirs(session_folder, exist_ok=True)
+    
+    # Generate report
+    report = f"""
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                              FOCUSON SESSION REPORT                          ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+📊 SESSION SUMMARY:
+   • Duration: {session_duration/60:.1f} minutes
+   • Total Blinks: {session_data['blink_count']}
+   • Focus Score: {avg_focus_score:.1f}/100
+   • Productivity: {productivity_percentage:.1f}%
+   • Distractions: {session_data['distraction_count']}
+
+🎯 PERFORMANCE:
+"""
+    
+    if avg_focus_score >= 80:
+        report += "   • 🎉 Excellent focus maintained!\n"
+    elif avg_focus_score >= 60:
+        report += "   • 👍 Good focus with room for improvement\n"
+    else:
+        report += "   • 📉 Focus needs improvement\n"
+    
+    if productivity_percentage >= 80:
+        report += "   • 🎯 High productivity achieved\n"
+    elif productivity_percentage >= 60:
+        report += "   • 📊 Moderate productivity\n"
+    else:
+        report += "   • ⚠️  Low productivity - consider environment changes\n"
+    
+    report += f"""
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                              END OF REPORT                                   ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+"""
+    
+    # Save report
+    report_file = f"{session_folder}/report.txt"
+    with open(report_file, 'w') as f:
+        f.write(report)
+    
+    # Save session data
+    data_file = f"{session_folder}/session_data.json"
+    session_data['end_time'] = time.time()
+    session_data['duration'] = session_duration
+    session_data['avg_focus_score'] = avg_focus_score
+    session_data['productivity_percentage'] = productivity_percentage
+    
+    with open(data_file, 'w') as f:
+        json.dump(session_data, f, indent=2)
+    
+    print(f"\n📁 Session data saved to: {session_folder}/")
+    print(f"📄 Report: {report_file}")
+    print(f"📊 Data: {data_file}")
+    print(report)
+
 while True:
     _, frame = webcam.read()
     gaze.refresh(frame)
@@ -165,7 +261,7 @@ while True:
     # Monitor for significant changes from baseline
     if baseline_established and bpm > 0:
         change_percentage = abs(bpm - baseline_bpm) / baseline_bpm * 100
-        if change_percentage >= 40:  # 40% change threshold
+        if change_percentage >= 40:  # 40% change threshold (could be 30% to be more realistic)
             if bpm > baseline_bpm:
                 change_message = "Increased Blinking Rate"
             else:
@@ -221,6 +317,67 @@ while True:
     # Clear productivity message after duration
     if current_time - productivity_message_time > productivity_message_duration:
         productivity_message = ""
+
+    # Update persistent focus score (penalties applied only once per event)
+    time_since_update = current_time - last_score_update
+    
+    # Check for blink rate changes and apply penalty only once
+    if baseline_established and bpm > 0:
+        change_percentage = abs(bpm - baseline_bpm) / baseline_bpm * 100
+        if change_percentage >= 40 and not blink_penalty_applied:
+            focus_score -= 5  # Apply penalty only once
+            blink_penalty_applied = True
+        elif change_percentage < 40:
+            blink_penalty_applied = False  # Reset flag when condition improves
+    
+    # Check for eye contact issues and apply penalty only once
+    if looking_away_start_time is not None:
+        time_looking_away = current_time - looking_away_start_time
+        if time_looking_away >= eye_contact_threshold and not eye_contact_penalty_applied:
+            focus_score -= 3  # Apply penalty only once
+            eye_contact_penalty_applied = True
+        elif time_looking_away < eye_contact_threshold:
+            eye_contact_penalty_applied = False  # Reset flag when looking back
+    
+    # Check for productivity issues and apply penalty only once
+    if "NON-PRODUCTIVE" in productivity_message and not productivity_penalty_applied:
+        focus_score -= 8  # Apply penalty only once
+        productivity_penalty_applied = True
+    elif "NON-PRODUCTIVE" not in productivity_message:
+        productivity_penalty_applied = False  # Reset flag when productivity improves
+    
+    # Gradual score recovery over time (when no penalties are active)
+    if (baseline_established and bpm > 0 and abs(bpm - baseline_bpm) / baseline_bpm * 100 < 40) and \
+       (looking_away_start_time is None or current_time - looking_away_start_time < eye_contact_threshold) and \
+       "NON-PRODUCTIVE" not in productivity_message:
+        # Score recovers slowly when conditions are good
+        focus_score += focus_score_decay_rate * time_since_update
+    
+    # Clamp score between 0 and 100
+    focus_score = max(0, min(100, focus_score))
+    last_score_update = current_time
+    
+    port = "/dev/cu.usbmodem1103"
+    ser = serial.Serial(port, 9600)
+    
+    def score_to_color(score):
+        if score >= 70:
+            return "green"
+        elif score >= 30:
+            return "yellow"
+        else:
+            return "red"
+
+    def send_color(score):
+        color = score_to_color(score)
+        ser.write((color + "\n").encode())
+        
+    send_color(focus_score)
+
+    # Update session statistics (every 5 seconds)
+    if session_data['data_points'] == 0 or current_time - session_start_time - (session_data['data_points'] * 5) >= 5:
+        is_productive = "PRODUCTIVE" in productivity_message
+        update_session_stats(bpm, is_productive, focus_score)
 
     # Gaze direction detection
     if gaze.is_right():
@@ -280,7 +437,14 @@ while True:
     if productivity_message:
         draw_rounded_rect_with_bg(new_frame, productivity_message, (60, 360), 1, (0, 255, 255), 2, (0, 0, 0), 0.3)
     
-    cv2.imshow("Demo", new_frame)
+    # Display focus score
+    draw_rounded_rect_with_bg(new_frame, f"Focus Score: {focus_score:.0f}", (60, 400), 1.2, (255, 255, 255), 2, (0, 0, 0), 0.3)
+    
+    cv2.imshow("FocusON - Productivity Monitor", new_frame)
 
     if cv2.waitKey(1) == 27:
+        print("\n" + "="*60)
+        print("SESSION ENDED - GENERATING REPORT...")
+        print("="*60)
+        generate_session_report()
         break
